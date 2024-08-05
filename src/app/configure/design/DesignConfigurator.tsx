@@ -3,17 +3,20 @@
 import HandleComponent from "@/components/HandleComponent/HandleComponent"
 import { AspectRatio } from "@/components/ui/aspect-ratio"
 import { cn, formatPrice } from "@/lib/utils"
-import { ScrollArea } from "@radix-ui/react-scroll-area"
 import NextImage from "next/image"
 import { Rnd } from "react-rnd"
 import { RadioGroup } from "@headlessui/react"
-import { useState } from "react"
+import { useRef, useState } from "react"
 import { COLORS, FINISHES, MATERIALS, MODELS } from "@/validators/option-validator"
 import { Label } from "@/components/ui/label"
 import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigger } from "@/components/ui/dropdown-menu"
 import { Button } from "@/components/ui/button"
-import { CheckIcon, ChevronsUpDown } from "lucide-react"
+import { ArrowRight, CheckIcon, ChevronsUpDown } from "lucide-react"
 import { BASE_PRICE } from "@/config/producsts"
+import { ScrollArea } from "@/components/ui/scroll-area"
+import { resolve } from "path"
+import { useUploadThing } from "@/lib/uploadthing"
+import { useToast } from "@/components/ui/use-toast"
 
 interface DesignConfiguratorProps {
     configId: string,
@@ -25,7 +28,7 @@ interface DesignConfiguratorProps {
 }
 
 const DesignConfigurator = ({ configId, imageUrl, imageDimensions }: DesignConfiguratorProps) => {
-
+    const {toast} = useToast()
     const [options, setOptions] = useState<{
         color: (typeof COLORS)[number]
         model: (typeof MODELS.options)[number]
@@ -38,12 +41,90 @@ const DesignConfigurator = ({ configId, imageUrl, imageDimensions }: DesignConfi
         finish: FINISHES.options[0]
     })
 
+    const [renderedDimension, setRenderedDimension] = useState({
+        width: imageDimensions.width / 4,
+        height: imageDimensions.height / 4,
+    })
+
+    const [renderedPosition, setRenderedPosition] = useState({
+        x: 150,
+        y: 205,
+    })
+
+    const phoneCaseRef = useRef<HTMLDivElement>(null)
+    const containerRef = useRef<HTMLDivElement>(null)
+
+    const {startUpload} = useUploadThing('imageUploader')
+
+    async function saveConfiguration() {
+        try {
+            const { left: caseLeft, top: caseTop, width, height } = phoneCaseRef.current!.getBoundingClientRect()
+            const { left: containerLeft, top: containerTop } = containerRef.current!.getBoundingClientRect()
+            const leftOffset = caseLeft - containerLeft
+            const topOffset = caseTop - containerTop
+
+            const actualX = renderedPosition.x - leftOffset
+            const actualY = renderedPosition.y - topOffset
+
+
+            const canvas = document.createElement("canvas")
+            canvas.width = width
+            canvas.height = height
+
+            const ctx = canvas.getContext("2d")
+
+            const userImage = new Image()
+            userImage.crossOrigin = "anonymous"
+            userImage.src = imageUrl
+            await new Promise((resolve) => (userImage.onload = resolve))
+
+            ctx?.drawImage(
+                userImage,
+                actualX,
+                actualY,
+                renderedDimension.width,
+                renderedDimension.height
+            )
+
+            const base64 = canvas.toDataURL()
+            console.log(base64);
+
+            const base64Data = base64.split(",")[1]
+
+            const blob = base64ToBlob(base64Data, "image/png")
+            const file = new File([blob], "filename.png",{type: "image/png"})
+
+            //now we are passing configId, first we just create now we want to do some changes on that
+            await startUpload([file], {configId})
+
+        } catch (err) {
+            toast({
+                title: "Something went wrong",
+                description: "There was a problem saving your config, please try again.",
+                variant: "destructive"
+            })
+        }
+    }
+
+
+    //converting our saved canvas design to the png
+    function base64ToBlob(base64: string, mimeType: string) {
+        const byteCharacters = atob(base64)
+        const byteNumbers = new Array(byteCharacters.length)
+
+        for (let i = 0; i < byteCharacters.length; i++) {
+            byteNumbers[i] = byteCharacters.charCodeAt(i)
+        }
+
+        const byteArray = new Uint8Array(byteNumbers)
+        return new Blob([byteArray], {type: mimeType})
+    }
 
     return (
-        <div className="relative mt-20 grid grid-cols-3 mb-20 pb-20">
-            <div className="relative h-[37.5rem] overflow-hidden col-span-2 w-full max-w-4xl flex items-center justify-center rounded-lg border-2 border-dashed border-gray-300 p-12 text-center focus:outline-none focus:ring-2 focus:ring-primary focus:ring-offset-2 ">
+        <div className="relative mt-20 grid grid-cols-1 lg:grid-cols-3 mb-20 pb-20">
+            <div ref={containerRef} className="relative h-[37.5rem] overflow-hidden col-span-2 w-full max-w-4xl flex items-center justify-center rounded-lg border-2 border-dashed border-gray-300 p-12 text-center focus:outline-none focus:ring-2 focus:ring-primary focus:ring-offset-2 ">
                 <div className="relative w-60 bg-opacity-50 pointer-events-none aspect-[896/1831]">
-                    <AspectRatio ratio={896 / 1831} className="pointer-events-none relative z-50 aspect-[896/1831] w-full">
+                    <AspectRatio ref={phoneCaseRef} ratio={896 / 1831} className="pointer-events-none relative z-50 aspect-[896/1831] w-full">
                         <NextImage fill alt="phone image" src="/phone-template.png" className="pointer-events-none z-50 select-none" />
                     </AspectRatio>
                     <div className="absolute z-40 inset-0 left-[3px] top-px right-[3px] bottom-px rounded-[32px] shadow-[0_0_0_99999px_rgba(229,231,235,0.6)]" />
@@ -57,6 +138,21 @@ const DesignConfigurator = ({ configId, imageUrl, imageDimensions }: DesignConfi
                     height: imageDimensions.height / 4,
                     width: imageDimensions.width / 4
                 }}
+                    onResizeStop={(_, __, ref, ___, { x, y }) => {
+                        setRenderedDimension({
+                            height: parseInt(ref.style.height.slice(0, -2)),
+                            width: parseInt(ref.style.width.slice(0, -2))
+                        })
+
+                        setRenderedPosition({ x, y })
+
+                    }}
+
+                    onDragStop={(_, data) => {
+                        const { x, y } = data
+                        setRenderedPosition({ x, y })
+                    }}
+
                     className="absolute z-20 border-[3px] border-primary"
                     lockAspectRatio
                     resizeHandleComponent={{
@@ -73,7 +169,7 @@ const DesignConfigurator = ({ configId, imageUrl, imageDimensions }: DesignConfi
 
             </div>
 
-            <div className="h-[37.5rem] felx flex-col bg-white">
+            <div className="h-[37.5rem] w-full col-span-full lg:col-span-1 felx flex-col bg-white">
                 <ScrollArea className="relative flex-1 overflow-auto">
                     <div aria-hidden="true" className="absolute z-10 inset-x-0 bottom-0 h-12 bg-gradient-to-t from-white pointer-events-none" />
                     <div className="px-8 pb-12 pt-8">
@@ -170,9 +266,14 @@ const DesignConfigurator = ({ configId, imageUrl, imageDimensions }: DesignConfi
                             <p className="font-medium whitespace-nowrap">
                                 {formatPrice((BASE_PRICE + options.finish.price + options.material.price) / 100)}
                             </p>
+                            <Button className="w-full" size="sm" onClick={saveConfiguration}>
+                                Continue <ArrowRight className="h-4 w-4 ml-1.5 inline" />
+                            </Button>
                         </div>
                     </div>
                 </div>
+
+
             </div>
         </div >
     )
